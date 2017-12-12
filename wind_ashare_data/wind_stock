@@ -1,323 +1,207 @@
 # -*- coding: utf-8 -*-
 """
-Created on Mon Sep 11 22:16:51 2017
+Created on Mon Dec 11 14:10:57 2017
 
-@author: alfre
+@author: taoch
+
+##### Wind股票相关原始数据读取 #####
 """
-
-'''
- 程序：Wind股票数据下载
- 功能：从Wind终端或者Wind资讯量化接口个人免费版中下载股票相关数据，保存至本地MySQL数据库，以进一步加工处理和分析
- 创建时间：2016/01/15  V1.01 创建版本，Python2.7
- 更新历史：2017/01/06  V1.02 从本地文件读取股票代码列表;升级到Python3.5版本
-           2017/01/07  V1.03 封装为函数，便于调试和代码管理
-           2017/01/08  V1.04 封装为类，为后续完善功能准备。自动从Wind中获取股票列表，独立运行；增加日志和参数处理
-
- 环境和类库：使用Python 3.5及第三方库pandas、WindPy、sqlalchemy
-             数据库：MySQL 5.7.16
-             Wind资讯量化接口 个人版（免费），可从Wind官网或大奖章网站下载安装，注册即可使用
- 作者：yuzhucu
-'''
-####################################################################################################################
+# 载入模块
 import pandas as pd
+pd.set_option('expand_frame_repr',False)
+import numpy as np
+import datetime
+import time
+
 from WindPy import *
-from sqlalchemy import create_engine
-import datetime,time
-import os
+w.start()
 
+import config
 
-class WindStock():
+class WindStkData(object):
     
-    w.start()
-    
-    def __init__(self, start_date,end_date):
-        self.start_date = start_date
-        self.end_date = end_date        
-        self.hist_period = []
-
-        self.tradingDay_hist = pd.Series()                      # 历史交易日
-        self.sh_ashare_list = pd.Series()                       # 上交所股票代码
-        self.sz_ashare_list = pd.Series()                       # 深交所股票代码
-        self.all_ashare_list = pd.Series()                      # 所有A股股票代码
+    def __init__(self, start_date, end_date):
+        '''
+        设定内置变量
+        输入参数
+        -------
+        start_date: int
+            开始日期, 格式'YYYYMMDD' 
+        end_date: int
+            截止日期, 格式'YYYYMMDD'
+        '''
+        self.start = str(start_date)                         # 开始时间
+        self.end = str(end_date)                             # 结束时间
         
+        self.hist_tradeDays = pd.Series()               # 历史交易日
+        self.sh_ashare_list = pd.Series()               # 上交所股票代码
+        self.sz_ashare_list = pd.Series()               # 深交所股票代码
+        self.all_ashare_list = pd.Series()              # 所有股票代码
         
+                                        
     def getCurrentTime(self):
         '''
         获取当前时间
         '''
-        return time.strftime('[%Y-%m-%d %H:%M:%S]', time.localtime(time.time()))
+        t = time.strftime('%Y-%m-%d',time.localtime(time.time()))
+        return pd.Series(pd.to_datetime(t))
+        
         
     def getHistoricalDate(self):
         '''
-        获取历史回测交易日，从start_date到end_date，取首不取尾
+        获取历史回测交易日
         '''
-        _tday = w.tdays(self.start_date,self.end_date)
-        _tradingDay_hist = pd.Series_tday.Data[0]
-
-        # 匹配内部变量
-        self.tradingDay_hist
-        return _tradingDay_hist
+        # 从Wind读取交易日数据，取头不取尾
+        _tday = w.tdays(self.start, self.end)
+        _tradingDay_hist = pd.Series(_tday.Data[0])
         
-    def get_sh_ashare_list(self):
+        # 匹配内部变量
+        self.hist_tradeDays = _tradingDay_hist
+        
+        return _tradingDay_hist
+    
+    
+    def getSHStkList(self):
         '''
         获取所有以SH结尾的上交所股票代码
         '''
         # 获取回测历史时间
-        _td = self.getHistoricalDate(self)
+        _td = self.getHistoricalDate()
         
-        # 生成一个Series，行是时间，列是股票代码
-        _sh_ashare_list = pd.Series(index=_td,name='sh_stock_list')
+        # 生成一个Series，行是时间，列是代码
+        _shStkList = pd.Series(index = _td, name='sh_stk_list')
+        
+        # 获取当天股票数据
         for t in _td:
-            # 获取当日所有股票数据
-            AllShAStock = w.wset("SectorConstituent",
-            "date=" + date.strftime(t,'%Y%m%d') + ";sectorId=a001010200000000;field=wind_code")
-            if AllShAStock.ErrorCode != 0:
-                print('Get Data failed on ' + date.strftime(t,'%Y-%m-%d'))
-            _sh_ashare_list.ix[t] = AllShAStock.Data
+            allShStk = w.wset("SectorConstituent",
+                              "date = " + date.strftime(t,'%Y%m%d') + ";sectorId = a001010200000000; field = wind_code")
+            if allShStk.ErrorCode != 0:
+                print('Get Data Failed on ' + date.strftime(t,'%Y%m%d'))
+                
+            _shStkList.ix[t] = allShStk.Data[0]
         
         # 匹配内部变量
-        self.sh_ashare_list = _sh_ashare_list
-        return _sh_ashare
-        
-    def get_sz_ashare_list(self):
+        self.sh_ashare_list = _shStkList
+        return _shStkList
+    
+    
+    def getSZStkList(self):
         '''
         获取所有以SZ结尾的深交所股票代码
         '''
         # 获取回测历史时间
-        _td = self.getHistoricalDate(self)
+        _td = self.getHistoricalDate()
         
-        # 生成一个Series，行是时间，列是股票代码
-        _sz_ashare_list = pd.Series(index=_td,name='sz_stock_list')
+        # 生成一个Series,行是时间，列是代码
+        _szStkList = pd.Series(index = _td, name = 'sz_stk_list')
+        
+        # 获取当天股票数据
         for t in _td:
-            # 获取当日所有股票数据
-            AllSzAStock = w.wset("SectorConstituent",
-            "date=" + date.strftime(t,'%Y%m%d') + ";sectorId=a001010300000000;field=wind_code")
-            if AllSzAStock.ErrorCode != 0:
-                print('Get Data failed on ' + date.strftime(t,'%Y-%m-%d'))
-            _sz_ashare_list.ix[t] = AllSzAStock.Data
+            allSzStk = w.wset("SectorConstituent",
+                              "date = " + date.strftime(t,'%Y%m%d') + ";sectorId=a001010300000000; field = wind_code")
+            if allSzStk.ErrorCode != 0:
+                print('Get Data Failed on ' + date.strftime(t,'%Y%m%d'))
+                
+            _szStkList.ix[t] = allSzStk.Data[0]
         
         # 匹配内部变量
-        self.sz_ashare_list = _sz_ashare_list
-        return _sz_ashare_list
+        self.sz_ashare_list = _szStkList
+        return _szStkList
+    
 
-    def get_all_ashare_list(self):
+    def getAllStkList(self):
         '''
         获取所有A股股票代码
         '''
         # 获取回测历史时间
-        _td = self.getHistoricalDate(self)
+        _td = self.getHistoricalDate()
         
-        # 生成一个Series，行是时间，列是股票代码
-        _all_ashare_list = pd.Series(index=_td,name='all_stock_list')
+        # 生成一个Series, 行是时间，列是代码
+        _allStkList = pd.Series(index = _td, name = 'all_stk_list')
         for t in _td:
-            # 获取当日所有股票数据
-            AllAStock =w.wset("SectorConstituent",
-            "date=" + date.strftime(t,'%Y%m%d') + ";sectorId=a001010100000000;field=wind_code")
-            if AllAStock.ErrorCode != 0:
-                print('Get Data failed on ' + date.strftime(t,'%Y-%m-%d'))
-            _all_ashare_list.ix[t] = AllAStock.Data
-
+            allAStk = w.wset("SectorConstituent",
+                             "date = " + date.strftime(t,'%Y%m%d') + ";sectorId=a001010100000000; field = wind_code")
+            if allAStk.ErrorCode != 0:
+                print('Get Data Failed on ' + date.strftime(t,'%Y%m%d'))
+                
+            _allStkList.ix[t] = allAStk.Data[0]
+            
         # 匹配内部变量
-        self.all_ashare_list = _all_ashare_list
-        return _all_ashare_list
-        
-
-
-# 取数据的命令如何写可以用命令生成器来辅助完成
-wsd_data=w.wsd("000001.SZ", "open,high,low,close", "2015-12-10", "2015-12-22")
-
-#演示如何将api返回的数据装入Pandas的Series
-open=pd.Series(wsd_data.Data[0])
-high=pd.Series(wsd_data.Data[1])
-low=pd.Series(wsd_data.Data[2])
-close=pd.Series(wsd_data.Data[3])
-
-print('open:/n',open)
-print('high:/n',high)
-print('low:/n',low)
-print('close:/n',close)
-
-#演示如何将api返回的数据装入Pandas的DataFrame
-fm=pd.DataFrame(wsd_data.Data,index=wsd_data.Fields,columns=wsd_data.Times)
-fm=fm.T #将矩阵转置
-print('fm:/n',fm)
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-
-    def AStockHisData(self,symbols,start_date,end_date,step=0):
+        self.all_ashare_list = _allStkList        
+        return _allStkList
+    
+    
+    def getRawData(self):
         '''
-        逐个股票代码查询行情数据
-        wsd代码可以借助 WindNavigator自动生成copy即可使用;时间参数不设，默认取当前日期，可能是非交易日没数据;
-        只有一个时间参数时，默认作为为起始时间，结束时间默认为当前日期；如设置两个时间参数则依次为起止时间
-        '''
-        print(self.getCurrentTime(),": Download A Stock Starting:")
-        for symbol in symbols:
-             w.start()
-             try:
-                 #stock=w.wsd(symbol,'trade_code,open,high,low,close,volume,amt',start_date,end_date)
-                 '''
-                 wsd代码可以借助 WindNavigator自动生成copy即可使用;
-                 时间参数不设，默认取当前日期，可能是非交易日没数据;
-                 只有一个时间参数，默认为起始时间到最新；如设置两个时间参数则依次为起止时间
-                '''
-                #w.wsd("603998.SH", "industry_citiccode", "ED0D", "2017-09-10", "industryType=1")
+        获取交易行情数据, 按照股票每只储存数据(字段参考WIND参考数据服务，代码RDF)
+        #stock=w.wsd(symbol,'trade_code,open,high,low,close,volume,amt',start_date,end_date)
+        '''    
+        # 获取全市场股票代码
+        _StkList = self.getAllStkList()
 
-                #w.wsd("603998.SH", "industry_citiccode", "ED0D", "2017-09-10", "industryType=2")
-                 
-                 stock=w.wsd(symbol, "trade_code,open,high,low,close,pre_close,volume,amt,dealnum,chg,pct_chg,vwap, adjfactor,close2,turn,free_turn,oi,oi_chg,pre_settle,settle,chg_settlement,pct_chg_settlement, lastradeday_s,last_trade_day,rel_ipo_chg,rel_ipo_pct_chg,susp_reason,close3, pe_ttm,val_pe_deducted_ttm,pe_lyr,pb_lf,ps_ttm,ps_lyr,dividendyield2,ev,mkt_cap_ard,pb_mrq,pcf_ocf_ttm,pcf_ncf_ttm,pcf_ocflyr,pcf_nflyr,trade_status", start_date,end_date)
-                 index_data = pd.DataFrame()
-                 index_data['trade_date']=stock.Times
-                 stock.Data[0]=symbol
-                 index_data['stock_code']=stock.Data[0]
-                 #index_data['stock_code'] =symbol
-                 index_data['open'] =stock.Data[1]              
-                 index_data['high'] =stock.Data[2]
-                 index_data['low']  =stock.Data[3]
-                 index_data['close']=stock.Data[4]
-                 index_data['pre_close']=stock.Data[5]
-                 index_data['volume']=stock.Data[6]
-                 index_data['amt']=stock.Data[7]                               # 成交额
-                 index_data['dealnum']=stock.Data[8]                           # 成交笔数
-                 index_data['pct_chg']=stock.Data[10]
-                 index_data['vwap']=stock.Data[11]                             # 均价
-                 index_data['adj_factor']=stock.Data[12]
-                 index_data['turn']=stock.Data[14]                             # 换手率
-                 index_data['lastradeday_s']=stock.Data[22]                    # 最近交易日期
-                 index_data['pe_ttm']=stock.Data[28]
-                 index_data['val_pe_deducted_ttm']=stock.Data[29]              # 市盈率PE（TTM,扣除非经常性亏损）
-                 index_data['pe_lyr']=stock.Data[30]                           # 市盈率PE
-                 index_data['pb_lf']=stock.Data[31]
-                 index_data['ps_ttm']=stock.Data[32]
-                 index_data['ps_lyr']=stock.Data[33]
-                 index_data['dividendyield2']=stock.Data[34]
-                 index_data['ev']=stock.Data[35]
-                 index_data['mkt_cap_ard']=stock.Data[36]                      # 总市值2
-                 index_data['pb_mrq']=stock.Data[37]                           # 市净率PB（MRQ）
-                 index_data['pcf_ocf_ttm']=stock.Data[38]                      # 市现率PCF（经营现金流TTM)
-                 index_data['pcf_ncf_ttm']=stock.Data[39]                      # 市现率PCF（现金净流量TTM）
-                 index_data['pcf_ocflyr']=stock.Data[40]                       # 市现率PCF（经营现金流LYR）
-                 index_data['pcf_ncflyr']=stock.Data[41]
-                 index_data['trade_status']=stock.Data[42]
-                 index_data['data_source']='Wind'
-                 index_data['created_date']=time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time()))
-                 index_data['updated_date']=time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time()))
-                 index_data = index_data[index_data['open'] > 0]
-                 #index_data.fillna(0)
-                 try:
-                    index_data.to_sql('stock_daily_data',engine,if_exists='append');
-                 except Exception as e:
-                     #如果写入数据库失败，写入日志表，便于后续分析处理
-                     error_log=pd.DataFrame()
-                     error_log['trade_date']=stock.Times
-                     error_log['stock_code']=stock.Data[0]
-                     error_log['start_date']=start_date
-                     error_log['end_date']=end_date
-                     error_log['status']=None
-                     error_log['table']='stock_daily_data'
-                     error_log['args']='Symbol: '+symbol+' From '+start_date+' To '+end_date
-                     error_log['error_info']=e
-                     error_log['created_date']=time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time()))
-                     error_log.to_sql('stock_error_log',engine,if_exists='append')
-                     print ( self.getCurrentTime(),": SQL Exception :%s" % (e) )
-                     continue
-                 w.start()
-             except Exception as e:
-                     #如果读取处理失败，可能是网络中断、频繁访问被限、历史数据缺失等原因。写入相关信息到日志表，便于后续补充处理
-                     error_log=pd.DataFrame()
-                     error_log['trade_date']=stock.Times
-                     error_log['stock_code']=stock.Data[0]
-                     error_log['start_date']=start_date
-                     error_log['end_date']=end_date
-                     error_log['status']=None
-                     error_log['table']='stock_daily_data'
-                     error_log['args']='Symbol: '+symbol+' From '+start_date+' To '+end_date
-                     error_log['error_info']=e
-                     error_log['created_date']=time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time()))
-                     error_log.to_sql('stock_error_log',engine,if_exists='append')
-                     print ( self.getCurrentTime(),":index_data %s : Exception :%s" % (symbol,e) )
-                     time.sleep(sleep_time)
-                     w.start()
-                     continue
-             print(self.getCurrentTime(),": Downloading [",symbol,"] From "+start_date+" to "+end_date)
-        print(self.getCurrentTime(),": Download A Stock Has Finished .")
+        # 获取历史日期
+        _td = self.getHistoricalDate()
+        
+        _data = pd.DataFrame()
+        _codes = []
+        for t in _td:
+            for code in _StkList.ix[t]:
+                # 若股票数据已经读取完成则跳过，否则继续执行数据读取
+                if code in _codes:
+                    continue
+                else:
+                    _codes.append(code)
+                    stock = w.wsd(code,"trade_code,open,high,low,close,pre_close,volume,amt,dealnum,pct_chg,vwap,\
+                    adjfactor,turn,free_turn,maxupordown,lastradeday_s,last_trade_day,pe_ttm,val_pe_deducted_ttm,pe_lyr,pb_lf,\
+                    ps_ttm,ps_lyr,dividendyield2,ev,mkt_cap_ard,pb_mrq,pcf_ocf_ttm,pcf_ncf_ttm,pcf_ocflyr,pcf_nflyr,\
+                    trade_status",self.start,self.end)
+                    _data['TradingDate']=pd.to_datetime(stock.Times)
+                    _data['SecuCode']=stock.Codes*len(_data['TradingDate'])    # 股票代码
+                    _data['open']=stock.Data[1]                                # 开盘价
+                    _data['high']=stock.Data[2]                                # 最高价
+                    _data['low']=stock.Data[3]                                 # 最低价
+                    _data['close']=stock.Data[4]                               # 收盘价
+                    _data['pre_close']=stock.Data[5]                           # 前收盘价
+                    _data['volume']=stock.Data[6]                              # 成交量
+                    _data['amt']=stock.Data[7]                                 # 成交额
+                    _data['dealnum']=stock.Data[8]                             # 成交笔数
+                    _data['pct_chg']=stock.Data[9]                             # 涨跌幅
+                    _data['vwap']=stock.Data[10]                               # 均价
+                    _data['adj_factor']=stock.Data[11]                         # 复权因子
+                    _data['turn']=stock.Data[12]                               # 换手率
+                    _data['free_turn']=stock.Data[13]                          # 换手率(基准 自由流通股本)
+                    _data['maxupordown'] = stock.Data[14]                      # 涨跌停状态
+                    _data['lastradeday_s']=stock.Data[15]                      # 最近交易日期
+                    _data['last_trade_day']=stock.Data[16]                     # 市场最近交易日
+                    _data['pe_ttm']=stock.Data[17]                             # 市盈率(TTM)
+                    _data['val_pe_deducted_ttm']=stock.Data[18]                # 市盈率PE（TTM,扣除非经常性亏损）
+                    _data['pe_lyr']=stock.Data[19]                             # 市盈率PE（LFY）
+                    _data['pb_lf']=stock.Data[20]                              # 市净率（LF）
+                    _data['ps_ttm']=stock.Data[21]                             # 市销率（TTM）
+                    _data['ps_lyr']=stock.Data[22]                             # 市销率（LYR）
+                    _data['dividendyield2']=stock.Data[23]                     # 股息率（近12个月）
+                    _data['ev']=stock.Data[24]                                 # 总市值1
+                    _data['mkt_cap_ard']=stock.Data[25]                        # 总市值2
+                    _data['pb_mrq']=stock.Data[26]                             # 市净率PB（MRQ）
+                    _data['pcf_ocf_ttm']=stock.Data[27]                        # 市现率PCF（经营现金流TTM)
+                    _data['pcf_ncf_ttm']=stock.Data[28]                        # 市现率PCF（现金净流量TTM）
+                    _data['pcf_ocflyr']=stock.Data[29]                         # 市现率PCF（经营现金流LYR）
+                    _data['pcf_ncflyr']=stock.Data[30]                         # 市现率PCF（现金净流量LYR）
+                    _data['trade_status']=stock.Data[31]                       # 交易状态（1：交易，2：待核查，0：停牌）
+                    _data['data_source']='Wind'                                # 数据来源
+                    #_data['updated_date']=time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time()))
+                    _data.set_index(['TradingDate','SecuCode'],drop=True)
+                    _data.to_csv(config.input_data_path + '/stock_data/' + stock.Codes[0] + '.csv',
+                                 encoding='GBK')
+                    
+                
+if __name__ == '__main__':
+    getData = WindStkData(20171204,20171208)
+    hist_data = getData.getHistoricalDate()    
+#    sh = getData.getSHStkList()
+#    sz = getData.getSZStkList()
+#    allA = getData.getAllStkList()
+    getData.getRawData()   
+    
+    
 
-    def getAStockCodesFromCsv(self):
-        '''
-        获取股票代码清单，链接数据库
-        '''
-        file_path=os.path.join(os.getcwd(),'Stock.csv')
-        stock_code = pd.read_csv(filepath_or_buffer=file_path, encoding='gbk')
-        Code=stock_code.code
-        return Code
-
-    def getAStockCodesWind(end_date=time.strftime('%Y%m%d',time.localtime(time.time()))):
-        '''
-        通过wset数据集获取所有A股股票代码，深市代码为股票代码+SZ后缀，沪市代码为股票代码+SH后缀。
-        如设定日期参数，则获取参数指定日期所有A股代码，不指定日期参数则默认为当前日期
-        :return: 指定日期所有A股代码，不指定日期默认为最新日期
-        '''
-        w.start()
-        #加日期参数取最指定日期股票代码
-        #stockCodes=w.wset("sectorconstituent","date="+end_date+";sectorid=a001010100000000;field=wind_code")
-        #不加日期参数取最新股票代码
-        stockCodes=w.wset("sectorconstituent","sectorid=a001010100000000;field=wind_code")
-        return stockCodes.Data[0]
-        #return stockCodes
-
-def main():
-    '''
-    主调函数，可以通过参数调整实现分批下载
-    '''
-    global engine,sleep_time,symbols
-    sleep_time=5
-    windStock=WindStock()
-    engine = create_engine('mysql://root:root@localhost/invest?charset=utf8')
-    #start_date='20100101'
-    #end_date='20131231'
-    #symbols=windStock.getAStockCodesFromCsv()#通过文件获取股票代码
-    #symbols=windStock.getAStockCodesWind()
-    #通过Wind API获取股票代码,默认取最新的，可以指定取历史某一日所有A股代码
-    #symbols=['000001.SZ', '000002.SZ', '000004.SZ']#通过直接赋值获取股票代码用于测试
-    #print (symbols)
-    #windStock.AStockHisData(symbols,start_date,end_date)
-    for i in range(2013,1990,-1):
-         start_date=str(i)+'0101'
-         end_date=str(i)+'1231'
-         print (start_date,end_date,'Starting')
-         symbols=windStock.getAStockCodesWind()
-         windStock.AStockHisData(symbols,start_date,end_date)
-         print (start_date,end_date,'Finished')
-
-
-
-def test():
-    '''
-    测试脚本，新增和优化功能时使用
-    '''
-    symbol='000001.SZ'
-    start_date='20170101'
-    end_date='20170109'
-    #w.start();
-    #stock=w.wsd(symbol,'trade_code,open,high,low,close')
-    #stock=w.wsd(symbol, "trade_status,open,high,low,close,pre_close,volume,amt,dealnum,chg,pct_chg,vwap, adjfactor,close2,turn,free_turn,oi,oi_chg,pre_settle,settle,chg_settlement,pct_chg_settlement, lastradeday_s,last_trade_day,rel_ipo_chg,rel_ipo_pct_chg,susp_reason,close3, pe_ttm,val_pe_deducted_ttm,pe_lyr,pb_lf,ps_ttm,ps_lyr,dividendyield2,ev,mkt_cap_ard,pb_mrq,pcf_ocf_ttm,pcf_ncf_ttm,pcf_ocflyr,pcf_nflyr", start_date,end_date)
-    #stock=w.wsd("000001.SZ", "pre_close,open,high,low,close,volume,amt,dealnum,chg,pct_chg,vwap,adjfactor,close2,turn,free_turn,oi,oi_chg,pre_settle,settle,chg_settlement,pct_chg_settlement,lastradeday_s,last_trade_day,rel_ipo_chg,rel_ipo_pct_chg,trade_status,susp_reason,close3", "2016-12-09", "2017-01-07", "adjDate=0")
-    #print (stock)
-
-    for i in range(2014,1990,-1):
-         start_date=str(i)+'0101'
-         end_date=str(i)+'1231'
-         print (start_date,end_date)
-
-if __name__ == "__main__":
-    main()
